@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   Plus,
   MessageSquare,
@@ -27,17 +27,23 @@ function classNames(...list: (string | false | undefined)[]) {
 }
 
 export default function Chat() {
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([
     { id: "m1", author: "them", text: "Hi 👋, how can I help you today?", time: "10:00" },
   ]);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+  if (messagesEndRef.current) {
+    messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+  }
+}, [messages]); // runs whenever messages change
+
   const handleSend = async () => {
     const trimmed = draft.trim();
     if (!trimmed) return;
 
-    // Add user message
     const userMsg: ChatMessage = {
       id: `${Date.now()}`,
       author: "me",
@@ -48,45 +54,49 @@ export default function Chat() {
     setDraft("");
     inputRef.current?.focus();
 
-    // Add placeholder bot message
     const botId = `${Date.now()}-bot`;
-    setMessages((prev) => [
-      ...prev,
-      { id: botId, author: "them", text: "", time: "" },
-    ]);
+    setMessages((prev) => [...prev, { id: botId, author: "them", text: "…", time: "" }]);
 
     try {
-      // Build chat history for Groq
       const history = [...messages, userMsg].map((m) => ({
         role: m.author === "me" ? "user" : "assistant",
         content: m.text || "",
       }));
 
-      // Call our API
       const resp = await fetch("/api/chat", {
         method: "POST",
         body: JSON.stringify({ messages: history }),
         headers: { "Content-Type": "application/json" },
       });
 
-      if (!resp.body) throw new Error("No response body");
+      const data = await resp.json();
+      let prettyText = data.content;
 
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let botText = "";
+      if (data.toolResult) {
+        const parsed = JSON.parse(data.content || "{}");
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        botText += decoder.decode(value, { stream: true });
-
-        // Update bot message progressively
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === botId ? { ...m, text: botText, time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) } : m
-          )
-        );
+        if (data.toolName === "createBooking" && !parsed.error) {
+          prettyText = `✅ Booking confirmed!\n\n📋 Test: ${parsed.testName}\n📅 Date: ${parsed.date}\n⏰ Time: ${parsed.time}\n📍 Location: ${parsed.location}\n🆔 Booking ID: ${parsed.bookingId}`;
+        } else if (data.toolName === "priceLookup" && !parsed.error) {
+          prettyText = `💰 Price for *${parsed.testName}*: ₹${parsed.price}\n📖 Source: ${parsed.source}`;
+        } else if (data.toolName === "handoff") {
+          prettyText = `🙋 Agent will reach out to you shortly.`;
+        } else if (parsed.error) {
+          prettyText = `⚠️ Error: ${parsed.error}`;
+        }
       }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === botId
+            ? {
+                ...m,
+                text: prettyText,
+                time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+              }
+            : m
+        )
+      );
     } catch (err) {
       setMessages((prev) =>
         prev.map((m) =>
@@ -117,8 +127,9 @@ export default function Chat() {
           </div>
         </aside>
 
-        {/* Column 2: Placeholder chat list */}
+        {/* Column 2: Chats list */}
         <section className="flex flex-col border-r border-zinc-700">
+          {/* Search bar */}
           <div className="h-14 flex items-center gap-2 px-3 border-b border-zinc-700">
             <div className="relative flex-1">
               <Search className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
@@ -131,8 +142,35 @@ export default function Chat() {
               <MoreVertical className="size-4" />
             </button>
           </div>
-          <div className="overflow-y-auto">
-            <p className="px-4 py-3 text-zinc-400">Chat list goes here</p>
+
+          {/* Chats scroll area */}
+          <div className="flex-1 overflow-y-auto">
+            {messages.length === 0 ? (
+              <p className="px-4 py-3 text-zinc-400">No chats yet</p>
+            ) : (
+              messages
+                .filter((m) => m.author === "me") // show one row per user message
+                .map((m) => (
+                  <div
+                    key={m.id}
+                    className="flex items-center gap-3 px-3 py-3 border-b border-zinc-700/70 hover:bg-zinc-700/40 cursor-pointer"
+                  >
+                    {/* Avatar */}
+                    <div className="size-11 rounded-full bg-emerald-600 flex items-center justify-center text-white font-semibold">
+                      {m.author === "me" ? "U" : "B"}
+                    </div>
+
+                    {/* Chat info */}
+                    <div className="flex-1 text-left">
+                      <div className="flex items-center justify-between">
+                        <p className="font-semibold truncate">Swastya.ai</p>
+                        <span className="text-xs text-zinc-400 ml-2">{m.time}</span>
+                      </div>
+                      <p className="text-sm text-zinc-300 truncate">{m.text}</p>
+                    </div>
+                  </div>
+                ))
+            )}
           </div>
         </section>
 
@@ -150,7 +188,7 @@ export default function Chat() {
             </button>
           </div>
 
-          {/* Messages */}
+          {/* Messages scroll area */}
           <div className="flex-1 overflow-y-auto bg-zinc-800 p-4">
             <div className="max-w-3xl mx-auto flex flex-col gap-2">
               {messages.map((m) => (
@@ -173,10 +211,12 @@ export default function Chat() {
                   <div className="text-[10px] opacity-70 mt-1 text-right">{m.time}</div>
                 </div>
               ))}
+              {/* Scroll anchor */}
+              <div ref={messagesEndRef} />
             </div>
           </div>
 
-          {/* Input */}
+          {/* Input bar stays pinned at bottom */}
           <div className="border-t border-zinc-700 p-3">
             <div className="max-w-3xl mx-auto flex items-center gap-2">
               <button className="size-10 grid place-items-center rounded-full bg-zinc-700 hover:bg-zinc-600">
