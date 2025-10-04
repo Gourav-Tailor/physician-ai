@@ -131,7 +131,7 @@ export function ChatList() {
                     </span>
                   </div>
                   <p className="text-sm text-muted-foreground truncate">
-                    {chat.lastMessage}
+                    {chat.lastMessage.substring(0, 25)}{chat.lastMessage.length > 25 ? "..." : ""}
                   </p>
                 </div>
 
