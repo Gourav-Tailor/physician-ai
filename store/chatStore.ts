@@ -16,6 +16,7 @@ export interface Chat {
   lastMessage: string;
   lastMessageTime: string;
   createdAt: string;
+  isHandoffMode?: boolean; // NEW: Track handoff mode per chat
 }
 
 interface StaticData {
@@ -39,6 +40,11 @@ interface ChatState {
   updateMessage: (chatId: string, messageId: string, updates: Partial<ChatMessage>) => void;
   deleteChat: (chatId: string) => void;
   clearAllChats: () => void;
+  
+  // NEW: Handoff actions
+  enableHandoffMode: (chatId: string) => void;
+  disableHandoffMode: (chatId: string) => void;
+  isHandoffActive: (chatId: string) => boolean;
   
   // Getters
   getCurrentChat: () => Chat | null;
@@ -92,7 +98,7 @@ export const useChatStore = create<ChatState>()(
         const initialMessage: ChatMessage = {
           id: get().generateMessageId(),
           author: "them",
-          text: "Hi 👋, how can I help you today?",
+          text: "Hi! 👋 How can I help you today?",
           time: get().formatTime(),
         };
 
@@ -100,12 +106,13 @@ export const useChatStore = create<ChatState>()(
           id: newChatId,
           title: "New Chat",
           messages: [initialMessage],
-          lastMessage: initialMessage.text || "",
+          lastMessage: initialMessage.text!,
           lastMessageTime: initialMessage.time,
           createdAt: new Date().toISOString(),
+          isHandoffMode: false, // NEW: Initialize handoff mode
         };
 
-        set((state) => ({
+        set(state => ({
           chats: [newChat, ...state.chats],
           currentChatId: newChatId,
         }));
@@ -113,46 +120,44 @@ export const useChatStore = create<ChatState>()(
         return newChatId;
       },
 
-      selectChat: (chatId: string) => {
-        set({ currentChatId: chatId });
-      },
+      selectChat: (chatId: string) => set({ currentChatId: chatId }),
 
       addMessage: (chatId: string, message: ChatMessage) => {
-        set((state) => ({
-          chats: state.chats.map((chat) =>
-            chat.id === chatId
+        set(state => ({
+          chats: state.chats.map(chat => 
+            chat.id === chatId 
               ? {
                   ...chat,
                   messages: [...chat.messages, message],
-                  lastMessage: message.text || "",
+                  lastMessage: message.text!,
                   lastMessageTime: message.time,
                   title: chat.title === "New Chat" && message.author === "me" 
-                    ? get().generateChatTitle(message.text || "")
+                    ? get().generateChatTitle(message.text!)
                     : chat.title,
                 }
               : chat
-          ),
+          )
         }));
       },
 
       updateMessage: (chatId: string, messageId: string, updates: Partial<ChatMessage>) => {
-        set((state) => ({
-          chats: state.chats.map((chat) =>
-            chat.id === chatId
+        set(state => ({
+          chats: state.chats.map(chat => 
+            chat.id === chatId 
               ? {
                   ...chat,
-                  messages: chat.messages.map((msg) =>
+                  messages: chat.messages.map(msg => 
                     msg.id === messageId ? { ...msg, ...updates } : msg
-                  ),
+                  )
                 }
               : chat
-          ),
+          )
         }));
       },
 
       deleteChat: (chatId: string) => {
-        set((state) => {
-          const remainingChats = state.chats.filter((chat) => chat.id !== chatId);
+        set(state => {
+          const remainingChats = state.chats.filter(chat => chat.id !== chatId);
           return {
             chats: remainingChats,
             currentChatId: state.currentChatId === chatId 
@@ -162,14 +167,38 @@ export const useChatStore = create<ChatState>()(
         });
       },
 
-      clearAllChats: () => {
-        set({ chats: [], currentChatId: null });
+      clearAllChats: () => set({ chats: [], currentChatId: null }),
+
+      // NEW: Handoff methods
+      enableHandoffMode: (chatId: string) => {
+        set(state => ({
+          chats: state.chats.map(chat => 
+            chat.id === chatId 
+              ? { ...chat, isHandoffMode: true }
+              : chat
+          )
+        }));
+      },
+
+      disableHandoffMode: (chatId: string) => {
+        set(state => ({
+          chats: state.chats.map(chat => 
+            chat.id === chatId 
+              ? { ...chat, isHandoffMode: false }
+              : chat
+          )
+        }));
+      },
+
+      isHandoffActive: (chatId: string) => {
+        const chat = get().chats.find(c => c.id === chatId);
+        return chat?.isHandoffMode || false;
       },
 
       // Getters
       getCurrentChat: () => {
         const { chats, currentChatId } = get();
-        return chats.find((chat) => chat.id === currentChatId) || null;
+        return chats.find(chat => chat.id === currentChatId) || null;
       },
 
       getCurrentMessages: () => {
@@ -179,19 +208,16 @@ export const useChatStore = create<ChatState>()(
 
       // Helper functions
       generateMessageId: () => `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-
+      
       generateChatTitle: (firstMessage: string) => {
         const words = firstMessage.trim().split(' ');
         return words.slice(0, 4).join(' ') + (words.length > 4 ? '...' : '');
       },
-
+      
       formatTime: () => {
-        return new Date().toLocaleTimeString([], { 
-          hour: "2-digit", 
-          minute: "2-digit" 
-        });
+        return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       },
-
+      
       getTestPrice: (testName: string) => {
         const { staticData } = get();
         const key = testName.toLowerCase();
@@ -201,7 +227,7 @@ export const useChatStore = create<ChatState>()(
     {
       name: "chat-storage",
       // Only persist chats, not temporary UI state
-      partialize: (state) => ({
+      partialize: (state) => ({ 
         chats: state.chats,
         currentChatId: state.currentChatId,
       }),

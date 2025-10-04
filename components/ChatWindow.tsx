@@ -19,10 +19,12 @@ import {
   Smile,
   MoreVertical,
   MessageSquare,
+  UserCheck,
 } from "lucide-react";
 import { useChatStore, ChatMessage } from "../store/chatStore";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
+import Markdown from "react-markdown";
 
 export function ChatWindow() {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -38,10 +40,15 @@ export function ChatWindow() {
     getCurrentMessages,
     generateMessageId,
     formatTime,
+    enableHandoffMode,
+    disableHandoffMode,
+    isHandoffActive,
   } = useChatStore();
 
   const currentChat = getCurrentChat();
   const messages = getCurrentMessages();
+
+  const isHandoff = currentChatId ? isHandoffActive(currentChatId) : false;
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -52,6 +59,75 @@ export function ChatWindow() {
       });
     }
   }, [messages]);
+
+  // NEW: Handoff handler
+  const handleHandoff = async () => {
+    if (!currentChatId) return;
+
+    // Add user message requesting agent
+    const userMsg: ChatMessage = {
+      id: generateMessageId(),
+      author: "me",
+      text: "agent",
+      time: formatTime(),
+    };
+    addMessage(currentChatId, userMsg);
+
+    // Immediately enable handoff mode
+    enableHandoffMode(currentChatId);
+
+    // Add system message
+    const systemMsg: ChatMessage = {
+      id: generateMessageId(),
+      author: "them",
+      text: "🔄 **Connecting you to a human agent...**\n\nPlease wait while we process your request.",
+      time: formatTime(),
+    };
+    addMessage(currentChatId, systemMsg);
+
+    try {
+      // Call handoff API
+      const response = await fetch('/api/handoff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chatId: currentChatId,
+          message: "User requested human agent",
+          userInfo: {
+            timestamp: new Date().toISOString(),
+            chatHistory: messages.slice(-5)
+          }
+        })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        const successMsg: ChatMessage = {
+          id: generateMessageId(),
+          author: "them",
+          text: `✅ **Agent will reach out shortly**
+
+${data.message}
+
+📞 **Support:** ${data.supportPhone}
+🎫 **Ticket ID:** ${data.ticketId}
+⏰ **Estimated Wait:** ${data.estimatedWaitTime}`,
+          time: formatTime(),
+        };
+        addMessage(currentChatId, successMsg);
+      }
+    } catch (error) {
+      // Handle error but keep handoff mode active
+      const errorMsg: ChatMessage = {
+        id: generateMessageId(),
+        author: "them",
+        text: `❌ **Handoff Error** - Please call: 1800-XXX-XXXX`,
+        time: formatTime(),
+      };
+      addMessage(currentChatId, errorMsg);
+    }
+  };
 
   const formatToolResult = (toolName: string, content: string) => {
     try {
@@ -120,6 +196,41 @@ ${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string)
     
     const messageText = text?.trim() || inputRef.current?.value.trim();
     if (!messageText) return;
+
+        // Check for handoff trigger
+    if (messageText.toLowerCase() === "agent") {
+      await handleHandoff();
+      if (inputRef.current) {
+        inputRef.current.value = "";
+        inputRef.current.focus();
+      }
+      return;
+    }
+
+    // If chat is in handoff mode, don't process through LLM
+    if (isHandoff) {
+      const userMsg: ChatMessage = {
+        id: generateMessageId(),
+        author: "me",
+        text: messageText,
+        time: formatTime(),
+      };
+      addMessage(currentChatId, userMsg);
+
+      const systemMsg: ChatMessage = {
+        id: generateMessageId(),
+        author: "them",
+        text: "⏳ **Your message has been noted** - A human agent will respond shortly.",
+        time: formatTime(),
+      };
+      addMessage(currentChatId, systemMsg);
+
+      if (inputRef.current) {
+        inputRef.current.value = "";
+        inputRef.current.focus();
+      }
+      return;
+    }
 
     const userMsg: ChatMessage = {
       id: generateMessageId(),
@@ -283,11 +394,21 @@ ${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string)
       <div className="flex items-center justify-between p-4 border-b bg-card">
         <div className="flex items-center gap-3">
           <Avatar className="h-10 w-10">
-            <AvatarFallback className="bg-primary text-primary-foreground">SA</AvatarFallback>
+            <AvatarFallback className={cn(
+              "text-primary-foreground",
+              isHandoff ? "bg-orange-500" : "bg-primary"
+            )}>
+              {isHandoff ? <UserCheck className="h-5 w-5" /> : "SA"}
+            </AvatarFallback>
           </Avatar>
           <div>
             <h3 className="font-medium">Swastya.ai</h3>
-            <Badge variant="secondary" className="text-xs">Online</Badge>
+            <Badge 
+              variant={isHandoff ? "outline" : "secondary"} 
+              className={cn("text-xs", isHandoff && "border-orange-500 text-orange-500")}
+            >
+              {isHandoff ? "Handoff Active" : "Online"}
+            </Badge>          
           </div>
         </div>
         <DropdownMenu>
@@ -398,10 +519,19 @@ ${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string)
       <div className="p-4 border-t bg-card">
         <div className="flex gap-2 items-end">
           <div className="flex-1 relative">
+            {isHandoff && (
+              <div className="mt-2 p-2 bg-orange-50 border border-orange-200 rounded text-sm text-orange-700">
+                <Markdown>🔄 **Handoff Mode Active** - A human agent will take over this conversation shortly.</Markdown>
+              </div>
+            )}
             <Input
               ref={inputRef}
-              placeholder={isStreaming ? "AI is responding..." : "Type a message..."}
-              onKeyPress={handleKeyPress}
+              placeholder={
+                  isHandoff 
+                    ? 'Waiting for human agent...'
+                    : 'Type a message or "agent" for human support...'
+                }
+              onKeyDown={handleKeyPress}
               disabled={!currentChatId || isStreaming}
               className="pr-20"
             />
