@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -24,11 +24,11 @@ import { useChatStore, ChatMessage } from "../store/chatStore";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 
-
 export function ChatWindow() {
   const inputRef = useRef<HTMLInputElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isStreaming, setIsStreaming] = useState(false);
 
   const {
     currentChatId,
@@ -46,16 +46,78 @@ export function ChatWindow() {
   // Auto-scroll to bottom when messages change
   useEffect(() => {
     if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ 
+      messagesEndRef.current.scrollIntoView({
         behavior: "smooth",
         block: "end"
       });
     }
   }, [messages]);
 
-  const handleSend = async (text?: string) => {
-    if (!currentChatId) return;
+  const formatToolResult = (toolName: string, content: string) => {
+    try {
+      const parsed = JSON.parse(content || "{}");
+      
+      if (toolName === "createBooking" && !parsed.error) {
+        return `✅ **Booking Confirmed!**
 
+📋 **Test:** ${parsed.testName}
+📅 **Date:** ${parsed.date}
+⏰ **Time:** ${parsed.time}
+📍 **Location:** ${parsed.location}
+🆔 **Booking ID:** ${parsed.bookingId}
+💰 **Price:** ${parsed.price ? `₹${parsed.price}` : 'Contact for pricing'}
+
+${parsed.confirmationMessage || 'You will receive a confirmation SMS shortly.'}`;
+      } else if (toolName === "priceLookup" && !parsed.error) {
+        return `💰 **Price Information**
+
+🧪 **Test:** ${parsed.testName}
+💵 **Price:** ₹${parsed.price}
+📋 **Currency:** ${parsed.currency || 'INR'}
+📖 **Source:** ${parsed.source}
+
+${parsed.note || ''}`;
+      } else if (toolName === "getAvailableTests") {
+        const tests = parsed.tests || [];
+        return `🧪 **Available Lab Tests**
+
+${tests.map((test: string) => `• ${test}`).join('\n')}
+
+Would you like to know the price for any specific test or book an appointment?`;
+      } else if (toolName === "getLocations") {
+        const locations = parsed.locations || [];
+        return `📍 **Available Locations**
+
+${locations.map((location: string) => `• ${location}`).join('\n')}
+
+🏠 **Home Collection:** ${parsed.homeCollection ? 'Available' : 'Not available'}
+🏥 **Lab Visit:** ${parsed.labVisit ? 'Available' : 'Not available'}
+🌍 **Service Area:** ${parsed.serviceAreas || 'Mumbai Metropolitan Region'}`;
+      } else if (toolName === "handoff") {
+        return `🙋♂️ **Connecting you to our support team**
+
+${parsed.message}
+
+📞 **Alternative Contact:** ${parsed.alternativeContact || 'Call 1800-XXX-XXXX'}
+🕒 **Business Hours:** ${parsed.businessHours || '9:00 AM - 8:00 PM'}`;
+      } else if (parsed.error) {
+        return `⚠️ **Error**
+
+${parsed.error}
+
+${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string) => `• ${s}`).join('\n')}` : ''}`;
+      }
+    } catch (e) {
+      // If parsing fails, return the raw content
+      return content;
+    }
+    
+    return content;
+  };
+
+  const handleSend = async (text?: string) => {
+    if (!currentChatId || isStreaming) return;
+    
     const messageText = text?.trim() || inputRef.current?.value.trim();
     if (!messageText) return;
 
@@ -74,7 +136,7 @@ export function ChatWindow() {
       inputRef.current.focus();
     }
 
-    // Add temporary bot message
+    // Add temporary bot message for streaming
     const botId = generateMessageId();
     const tempBotMsg: ChatMessage = {
       id: botId,
@@ -82,7 +144,9 @@ export function ChatWindow() {
       text: "…",
       time: "",
     };
+
     addMessage(currentChatId, tempBotMsg);
+    setIsStreaming(true);
 
     try {
       const history = [...messages, userMsg].map((m) => ({
@@ -90,83 +154,113 @@ export function ChatWindow() {
         content: m.text || "",
       }));
 
-      const resp = await fetch("/api/chat", {
+      const response = await fetch("/api/chat", {
         method: "POST",
         body: JSON.stringify({ messages: history }),
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Accept": "text/event-stream",
+        },
       });
 
-      const data = await resp.json();
-      let prettyText = data.content;
-
-      if (data.toolResult) {
-        const parsed = JSON.parse(data.content || "{}");
-
-        if (data.toolName === "createBooking" && !parsed.error) {
-          prettyText = `✅ **Booking Confirmed!**
-
-📋 **Test:** ${parsed.testName}
-📅 **Date:** ${parsed.date}
-⏰ **Time:** ${parsed.time}
-📍 **Location:** ${parsed.location}
-🆔 **Booking ID:** ${parsed.bookingId}
-💰 **Price:** ${parsed.price ? `₹${parsed.price}` : 'Contact for pricing'}
-
-${parsed.confirmationMessage || 'You will receive a confirmation SMS shortly.'}`;
-        } else if (data.toolName === "priceLookup" && !parsed.error) {
-          prettyText = `💰 **Price Information**
-
-🧪 **Test:** ${parsed.testName}
-💵 **Price:** ₹${parsed.price}
-📋 **Currency:** ${parsed.currency || 'INR'}
-📖 **Source:** ${parsed.source}
-
-${parsed.note || ''}`;
-        } else if (data.toolName === "getAvailableTests") {
-          const tests = parsed.tests || [];
-          prettyText = `🧪 **Available Lab Tests**
-
-${tests.map((test: string) => `• ${test}`).join('\n')}
-
-Would you like to know the price for any specific test or book an appointment?`;
-        } else if (data.toolName === "getLocations") {
-          const locations = parsed.locations || [];
-          prettyText = `📍 **Available Locations**
-
-${locations.map((location: string) => `• ${location}`).join('\n')}
-
-🏠 **Home Collection:** ${parsed.homeCollection ? 'Available' : 'Not available'}
-🏥 **Lab Visit:** ${parsed.labVisit ? 'Available' : 'Not available'}
-🌍 **Service Area:** ${parsed.serviceAreas || 'Mumbai Metropolitan Region'}`;
-        } else if (data.toolName === "handoff") {
-          prettyText = `🙋‍♂️ **Connecting you to our support team**
-
-${parsed.message}
-
-📞 **Alternative Contact:** ${parsed.alternativeContact || 'Call 1800-XXX-XXXX'}
-🕒 **Business Hours:** ${parsed.businessHours || '9:00 AM - 8:00 PM'}`;
-        } else if (parsed.error) {
-          prettyText = `⚠️ **Error**
-
-${parsed.error}
-
-${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string) => `• ${s}`).join('\n')}` : ''}`;
-        }
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      updateMessage(currentChatId, botId, {
-        text: prettyText,
-        time: formatTime(),
-      });
+      if (!response.body) {
+        throw new Error("No response body");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulatedContent = "";
+      let buffer = "";
+
+      const processStream = async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            
+            if (done) {
+              break;
+            }
+
+            // Decode the chunk and add to buffer
+            buffer += decoder.decode(value, { stream: true });
+            
+            // Process complete lines
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6); // Remove 'data: ' prefix
+                
+                if (data.trim() === '') continue; // Skip empty data lines
+                
+                try {
+                  const parsed = JSON.parse(data);
+                  
+                  if (parsed.type === 'content') {
+                    // Accumulate content for streaming effect
+                    accumulatedContent += parsed.content;
+                    updateMessage(currentChatId, botId, {
+                      text: accumulatedContent,
+                      time: formatTime(),
+                    });
+                  } else if (parsed.type === 'tool_result') {
+                    // Handle tool results
+                    const formattedResult = formatToolResult(parsed.toolName, parsed.content);
+                    accumulatedContent += formattedResult;
+                    updateMessage(currentChatId, botId, {
+                      text: accumulatedContent,
+                      time: formatTime(),
+                    });
+                  } else if (parsed.type === 'error') {
+                    // Handle errors
+                    const errorMessage = `❌ **Error:** ${parsed.content}\n\nPlease try again or contact support.`;
+                    updateMessage(currentChatId, botId, {
+                      text: accumulatedContent + errorMessage,
+                      time: formatTime(),
+                    });
+                  } else if (parsed.type === 'done') {
+                    // Stream completed
+                    updateMessage(currentChatId, botId, {
+                      text: accumulatedContent || "Sorry, I didn't receive a complete response. Please try again.",
+                      time: formatTime(),
+                    });
+                    break;
+                  }
+                } catch (parseError) {
+                  console.error("Error parsing streaming data:", parseError, "Data:", data);
+                }
+              }
+            }
+          }
+        } catch (streamError) {
+          console.error("Streaming error:", streamError);
+          updateMessage(currentChatId, botId, {
+            text: accumulatedContent + "\n\n❌ **Streaming Error:** Connection interrupted. Please try again.",
+            time: formatTime(),
+          });
+        } finally {
+          setIsStreaming(false);
+        }
+      };
+
+      await processStream();
+      
     } catch (err) {
+      console.error("Request error:", err);
       updateMessage(currentChatId, botId, {
         text: `❌ **Error:** ${String(err)}\n\nPlease try again or contact support.`,
         time: formatTime(),
       });
+      setIsStreaming(false);
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -175,16 +269,10 @@ ${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string)
 
   if (!currentChat) {
     return (
-      <div className="flex flex-col h-full">
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <MessageSquare className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-            <h3 className="text-lg font-medium mb-2">No chat selected</h3>
-            <p className="text-muted-foreground">
-              Select a chat from the sidebar to start messaging
-            </p>
-          </div>
-        </div>
+      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+        <MessageSquare className="h-16 w-16 mb-4 text-muted-foreground/50" />
+        <h3 className="text-lg font-medium mb-2">No chat selected</h3>
+        <p className="text-sm">Select a chat from the sidebar to start messaging</p>
       </div>
     );
   }
@@ -192,57 +280,45 @@ ${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string)
   return (
     <div className="flex flex-col h-full bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="flex items-center justify-between p-4 border-b bg-card">
         <div className="flex items-center gap-3">
           <Avatar className="h-10 w-10">
-            <AvatarImage src="/sa-avatar.png" />
-            <AvatarFallback className="bg-primary text-primary-foreground">
-              SA
-            </AvatarFallback>
+            <AvatarFallback className="bg-primary text-primary-foreground">SA</AvatarFallback>
           </Avatar>
           <div>
-            <h3 className="font-semibold">Swastya.ai</h3>
-            <div className="flex items-center gap-2">
-              <Badge variant="secondary" className="h-4 px-1.5 text-xs">
-                Online
-              </Badge>
-            </div>
+            <h3 className="font-medium">Swastya.ai</h3>
+            <Badge variant="secondary" className="text-xs">Online</Badge>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon">
-            <Phone className="h-4 w-4" />
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon">
-                <MoreVertical className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem>Clear Chat</DropdownMenuItem>
-              <DropdownMenuItem>Export Chat</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm">
+              <MoreVertical className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent>
+            <DropdownMenuItem>Clear Chat</DropdownMenuItem>
+            <DropdownMenuItem>Export Chat</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Messages Area - Fixed height with proper scroll */}
       <div className="flex-1 min-h-0">
         <ScrollArea className="h-full" ref={scrollAreaRef}>
-          <div className="p-4">
+          <div className="p-4 space-y-4">
             {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <MessageSquare className="h-12 w-12 text-muted-foreground mb-4" />
-                <h3 className="font-medium mb-2">Start the conversation</h3>
-                <p className="text-sm text-muted-foreground mb-4">
-                  Ask about lab tests, prices, or book an appointment
-                </p>
-                <div className="flex flex-wrap gap-2 justify-center">
+              <div className="flex flex-col items-center justify-center h-96 text-center">
+                <div className="mb-6">
+                  <h3 className="text-lg font-medium mb-2">Start the conversation</h3>
+                  <p className="text-sm text-muted-foreground">Ask about lab tests, prices, or book an appointment</p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 w-full max-w-md">
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => handleSend("What tests are available?")}
+                    disabled={isStreaming}
                   >
                     Available Tests
                   </Button>
@@ -250,6 +326,7 @@ ${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string)
                     variant="outline"
                     size="sm"
                     onClick={() => handleSend("What are your locations?")}
+                    disabled={isStreaming}
                   >
                     Locations
                   </Button>
@@ -257,91 +334,91 @@ ${parsed.suggestions ? `\n**Suggestions:**\n${parsed.suggestions.map((s: string)
                     variant="outline"
                     size="sm"
                     onClick={() => handleSend("Price for CBC test")}
+                    disabled={isStreaming}
                   >
                     Test Prices
                   </Button>
                 </div>
               </div>
             ) : (
-              <div className="space-y-4 pb-4">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={cn(
-                      "flex gap-3 max-w-4xl bg-blue-50/50 p-2 rounded-lg",
-                      message.author === "me" ? "ml-auto flex-row-reverse" : ""
-                    )}
-                  >
-                    <Avatar className="h-8 w-8 shrink-0">
-                      <AvatarImage src={message.author === "me" ? "/user-avatar.png" : "/sa-avatar.png"} />
-                      <AvatarFallback
-                        className={cn(
-                          message.author === "me"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted"
-                        )}
-                      >
-                        {message.author === "me" ? "U" : "SA"}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div
-                      className={cn(
-                        "rounded-lg px-4 py-2 max-w-[80%]",
+              messages.map((message) => (
+                <div
+                  key={message.id}
+                  className={cn(
+                    "flex gap-3",
+                    message.author === "me" ? "flex-row-reverse" : "flex-row"
+                  )}
+                >
+                  <Avatar className="h-8 w-8 mt-1">
+                    <AvatarImage src={message.author === "me" ? "/user-avatar.png" : "/sa-avatar.png"} alt="User Avatar" />
+                    <AvatarFallback className={cn(
+                      "text-xs",
+                      message.author === "me" ? "bg-primary text-primary-foreground" : "bg-secondary"
+                    )}>
+                      {message.author === "me" ? "U" : "SA"}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className={cn(
+                    "flex-1 max-w-[85%]",
+                    message.author === "me" ? "text-right" : "text-left"
+                  )}>
+                    {message.text && (
+                      <div className={cn(
+                        "rounded-lg px-3 py-2 inline-block max-w-full text-sm",
                         message.author === "me"
-                          ? "bg-primary text-primary-foreground"
+                          ? "bg-primary text-primary-foreground ml-auto"
                           : "bg-muted"
-                      )}
-                    >
-                      {message.text && (
-                        <div className="prose prose-sm dark:prose-invert font-sans">
-                          <ReactMarkdown>
-                            {message.text}
-                          </ReactMarkdown>
-                        </div>
-                      )}
-                      {message.fileName && (
-                        <div className="flex items-center gap-2 mt-2">
-                          <Paperclip className="h-4 w-4" />
-                          <span className="underline text-sm">{message.fileName}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-end mt-2">
-                        <span className="text-xs opacity-70">{message.time}</span>
+                      )}>
+                        <ReactMarkdown>
+                          {message.text}
+                        </ReactMarkdown>
                       </div>
+                    )}
+                    {message.fileName && (
+                      <Badge variant="outline" className="mt-1">
+                        {message.fileName}
+                      </Badge>
+                    )}
+                    <div className={cn(
+                      "text-xs text-muted-foreground mt-1",
+                      message.author === "me" ? "text-right" : "text-left"
+                    )}>
+                      {message.time}
                     </div>
                   </div>
-                ))}
-                <div ref={messagesEndRef} />
-              </div>
+                </div>
+              ))
             )}
+            <div ref={messagesEndRef} />
           </div>
         </ScrollArea>
       </div>
 
       {/* Input Area - Fixed at bottom */}
-      <div className="border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 p-4">
-        <div className="flex items-end gap-2 max-w-4xl">
-          <Button variant="outline" size="icon" className="shrink-0">
-            <Paperclip className="h-4 w-4" />
-          </Button>
-          <div className="relative flex-1">
+      <div className="p-4 border-t bg-card">
+        <div className="flex gap-2 items-end">
+          <div className="flex-1 relative">
             <Input
               ref={inputRef}
-              placeholder="Type a message..."
-              className="pr-12 min-h-[40px] resize-none"
-              onKeyDown={handleKeyPress}
-              disabled={!currentChatId}
+              placeholder={isStreaming ? "AI is responding..." : "Type a message..."}
+              onKeyPress={handleKeyPress}
+              disabled={!currentChatId || isStreaming}
+              className="pr-20"
             />
-            <div className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-1">
-              <Button variant="ghost" size="icon" className="h-8 w-8">
-                <Smile className="h-4 w-4" />
+            <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-1">
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" disabled={isStreaming}>
+                <Paperclip className="h-3 w-3" />
+              </Button>
+              <Button variant="ghost" size="sm" className="h-6 w-6 p-0" disabled={isStreaming}>
+                <Smile className="h-3 w-3" />
               </Button>
             </div>
           </div>
           <Button
             onClick={() => handleSend()}
-            disabled={!currentChatId}
+            disabled={!currentChatId || isStreaming}
             className="shrink-0"
+            size="sm"
           >
             <Send className="h-4 w-4" />
           </Button>

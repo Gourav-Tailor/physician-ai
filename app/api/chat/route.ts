@@ -19,12 +19,12 @@ const PRICE_LIST: Record<string, number> = {
 
 const AVAILABLE_LOCATIONS = [
   "Mumbai Central",
-  "Andheri West", 
+  "Andheri West",
   "Bandra East",
   "Powai",
   "Thane",
   "Navi Mumbai",
-  "Indranagar"
+  "Indiranagar"
 ];
 
 const AVAILABLE_TESTS = [
@@ -37,17 +37,17 @@ const AVAILABLE_TESTS = [
   "Kidney Function Test"
 ];
 
-// API Functions
-async function createBooking({ 
-  testName, 
-  date, 
-  time, 
-  location 
-}: { 
-  testName: string; 
-  date: string; 
-  time: string; 
-  location: string; 
+// API Functions (same as before - keeping for tools)
+async function createBooking({
+  testName,
+  date,
+  time,
+  location
+}: {
+  testName: string;
+  date: string;
+  time: string;
+  location: string;
 }) {
   // Validate location
   if (!AVAILABLE_LOCATIONS.includes(location)) {
@@ -75,11 +75,11 @@ async function createBooking({
 async function priceLookup({ testName }: { testName: string }) {
   const key = testName.toLowerCase();
   const price = PRICE_LIST[key];
-  
+
   if (price) {
-    return { 
-      testName, 
-      price, 
+    return {
+      testName,
+      price,
       source: "Swastya.ai Price List",
       currency: "INR",
       note: "Price includes home collection service"
@@ -87,11 +87,11 @@ async function priceLookup({ testName }: { testName: string }) {
   } else {
     // Suggest similar tests
     const availableTests = Object.keys(PRICE_LIST);
-    const suggestions = availableTests.filter(test => 
+    const suggestions = availableTests.filter(test =>
       test.includes(key) || key.includes(test)
     ).slice(0, 3);
-    
-    return { 
+
+    return {
       error: `Test "${testName}" not found in our price list.`,
       suggestions: suggestions.length > 0 ? suggestions : availableTests.slice(0, 5),
       availableTests: AVAILABLE_TESTS
@@ -100,7 +100,7 @@ async function priceLookup({ testName }: { testName: string }) {
 }
 
 async function handoff() {
-  return { 
+  return {
     message: "Our customer care executive will reach out to you within 15 minutes during business hours (9 AM - 8 PM).",
     status: "handoff_initiated",
     businessHours: "9:00 AM - 8:00 PM (Monday to Saturday)",
@@ -134,7 +134,7 @@ export async function POST(req: Request) {
   try {
     const { messages } = await req.json();
 
-    // Define enhanced tools/functions
+    // Define enhanced tools/functions (same as before)
     const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
       {
         type: "function",
@@ -144,20 +144,20 @@ export async function POST(req: Request) {
           parameters: {
             type: "object",
             properties: {
-              testName: { 
-                type: "string", 
-                description: "Name of the lab test to book" 
+              testName: {
+                type: "string",
+                description: "Name of the lab test to book"
               },
-              date: { 
-                type: "string", 
-                description: "Preferred date for test collection (YYYY-MM-DD format)" 
+              date: {
+                type: "string",
+                description: "Preferred date for test collection (YYYY-MM-DD format)"
               },
-              time: { 
-                type: "string", 
-                description: "Preferred time slot (e.g., '9:00 AM - 11:00 AM')" 
+              time: {
+                type: "string",
+                description: "Preferred time slot (e.g., '9:00 AM - 11:00 AM')"
               },
-              location: { 
-                type: "string", 
+              location: {
+                type: "string",
                 description: "Location for test collection or lab visit",
                 enum: AVAILABLE_LOCATIONS
               },
@@ -174,9 +174,9 @@ export async function POST(req: Request) {
           parameters: {
             type: "object",
             properties: {
-              testName: { 
-                type: "string", 
-                description: "Name of the lab test to get price for" 
+              testName: {
+                type: "string",
+                description: "Name of the lab test to get price for"
               },
             },
             required: ["testName"],
@@ -210,9 +210,9 @@ export async function POST(req: Request) {
         function: {
           name: "handoff",
           description: "Escalate to a human customer care agent when needed",
-          parameters: { 
-            type: "object", 
-            properties: {} 
+          parameters: {
+            type: "object",
+            properties: {}
           },
         },
       },
@@ -221,7 +221,7 @@ export async function POST(req: Request) {
     // Enhanced system message for better context
     const systemMessage = {
       role: "system" as const,
-      content: `You are Swastya.ai, an AI assistant for a medical lab booking service. 
+      content: `You are Swastya.ai, an AI assistant for a medical lab booking service.
 
 Key Information:
 - You help users book lab tests, check prices, and provide information about available services
@@ -239,11 +239,11 @@ Guidelines:
     };
 
     // Add system message if not present
-    const messagesWithSystem = messages[0]?.role === 'system' 
-      ? messages 
+    const messagesWithSystem = messages[0]?.role === 'system'
+      ? messages
       : [systemMessage, ...messages];
 
-    // Get completion from OpenAI/Groq
+    // Get STREAMING completion from OpenAI/Groq
     const completion = await client.chat.completions.create({
       model: "openai/gpt-oss-120b",
       messages: messagesWithSystem,
@@ -251,63 +251,131 @@ Guidelines:
       tool_choice: "auto",
       temperature: 0.7,
       max_tokens: 1000,
+      stream: true, // Enable streaming
     });
 
-    const response = completion.choices[0].message;
-
-    // Handle tool calls
-    if (response.tool_calls) {
-      const toolCall: any = response.tool_calls[0];
-      let result: any = {};
-      let toolName = toolCall.function.name;
-
-      try {
-        const args = JSON.parse(toolCall.function.arguments);
+    // Create a ReadableStream to handle the streaming response
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
         
-        switch (toolName) {
-          case "createBooking":
-            result = await createBooking(args);
-            break;
-          case "priceLookup":
-            result = await priceLookup(args);
-            break;
-          case "getAvailableTests":
-            result = await getAvailableTests();
-            break;
-          case "getLocations":
-            result = await getLocations();
-            break;
-          case "handoff":
-            result = await handoff();
-            break;
-          default:
-            result = { error: `Unknown tool: ${toolName}` };
+        try {
+          let functionCallData: any = null;
+          let toolCallId: string | null = null;
+          let functionName: string | null = null;
+          let functionArgs = '';
+
+          for await (const chunk of completion) {
+            const delta = chunk.choices[0]?.delta;
+
+            // Handle tool calls in streaming mode
+            if (delta?.tool_calls) {
+              const toolCall = delta.tool_calls[0];
+              
+              if (toolCall?.id) {
+                toolCallId = toolCall.id;
+              }
+              
+              if (toolCall?.function?.name) {
+                functionName = toolCall.function.name;
+              }
+              
+              if (toolCall?.function?.arguments) {
+                functionArgs += toolCall.function.arguments;
+              }
+            }
+            
+            // Handle regular content streaming
+            if (delta?.content) {
+              const data = JSON.stringify({
+                type: 'content',
+                content: delta.content
+              });
+              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            }
+
+            // Check if we have a complete function call
+            if (toolCallId && functionName && functionArgs) {
+              try {
+                const parsedArgs = JSON.parse(functionArgs);
+                let result: any = {};
+
+                // Execute the function call
+                switch (functionName) {
+                  case "createBooking":
+                    result = await createBooking(parsedArgs);
+                    break;
+                  case "priceLookup":
+                    result = await priceLookup(parsedArgs);
+                    break;
+                  case "getAvailableTests":
+                    result = await getAvailableTests();
+                    break;
+                  case "getLocations":
+                    result = await getLocations();
+                    break;
+                  case "handoff":
+                    result = await handoff();
+                    break;
+                  default:
+                    result = { error: `Unknown tool: ${functionName}` };
+                }
+
+                // Stream the tool result
+                const toolData = JSON.stringify({
+                  type: 'tool_result',
+                  toolName: functionName,
+                  content: JSON.stringify(result)
+                });
+                controller.enqueue(encoder.encode(`data: ${toolData}\n\n`));
+                
+                // Reset for next potential tool call
+                functionCallData = null;
+                toolCallId = null;
+                functionName = null;
+                functionArgs = '';
+              } catch (error) {
+                const errorData = JSON.stringify({
+                  type: 'error',
+                  content: `Failed to process ${functionName}: ${String(error)}`
+                });
+                controller.enqueue(encoder.encode(`data: ${errorData}\n\n`));
+              }
+            }
+          }
+
+          // Send completion signal
+          controller.enqueue(encoder.encode(`data: {"type": "done"}\n\n`));
+        } catch (error) {
+          // Send error
+          const errorData = JSON.stringify({
+            type: 'error',
+            content: `Stream error: ${String(error)}`
+          });
+          controller.enqueue(encoder.encode(`data: ${errorData}\n\n`));
+        } finally {
+          controller.close();
         }
-      } catch (error) {
-        result = { 
-          error: `Failed to process ${toolName}: ${String(error)}` 
-        };
-      }
+      },
+    });
 
-      return NextResponse.json({
-        role: "assistant",
-        content: JSON.stringify(result),
-        toolResult: true,
-        toolName,
-      });
-    }
-
-    // Normal text response
-    return NextResponse.json({
-      role: "assistant",
-      content: response.content,
+    // Return the stream with appropriate headers
+    return new NextResponse(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      },
     });
 
   } catch (error) {
     console.error("API Error:", error);
     return NextResponse.json(
       {
-        role: "assistant", 
+        role: "assistant",
         content: "I apologize, but I'm experiencing technical difficulties. Please try again in a moment or contact our support team.",
         error: true
       },
